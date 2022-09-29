@@ -2,6 +2,7 @@
 
 """ This is the starter code for the robot localization project """
 
+from re import X
 import rclpy
 from threading import Thread
 from rclpy.time import Time
@@ -9,12 +10,13 @@ from rclpy.node import Node
 from std_msgs.msg import Header
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, Point, Quaternion
+from visualization_msgs.msg import Marker
 from rclpy.duration import Duration
 import math
 import time
 import numpy as np
 from occupancy_field import OccupancyField
-from helper_functions import TFHelper
+from helper_functions import TFHelper, create_marker, draw_random_sample
 from rclpy.qos import qos_profile_sensor_data
 from angle_helpers import quaternion_from_euler
 
@@ -31,7 +33,7 @@ class Particle(object):
         """ Construct a new Particle
             x: the x-coordinate of the hypothesis relative to the map frame
             y: the y-coordinate of the hypothesis relative ot the map frame
-            theta: the yaw of KeyboardInterruptthe hypothesis relative to the map frame
+            theta: the yaw of the hypothesis relative to the map frame
             w: the particle weight (the class does not ensure that particle weights are normalized """ 
         self.w = w
         self.theta = theta
@@ -58,6 +60,7 @@ class ParticleFilter(Node):
             a_thresh: the amount of angular movement before triggering a filter update
             pose_listener: a subscriber that listens for new approximate pose estimates (i.e. generated through the rviz GUI)
             particle_pub: a publisher for the particle cloud
+            laser_subscriber: a subscriber that listens for data from the lidar
             last_scan_timestamp: this is used to keep track of the clock when using bags
             scan_to_process: the scan that our run_loop should process next
             occupancy_field: this helper class allows you to query the map for distance to closest obstacle
@@ -74,21 +77,27 @@ class ParticleFilter(Node):
         self.odom_frame = "odom"        # the name of the odometry coordinate frame
         self.scan_topic = "scan"        # the topic where we will get laser scans from 
 
-        self.n_particles = 300          # the number of particles to use
+        self.n_particles = 50          # the number of particles to use
 
         self.d_thresh = 0.2             # the amount of linear movement before performing an update
         self.a_thresh = math.pi/6       # the amount of angular movement before performing an update
 
+        self.linear_odom_noise = 0.05    # amount that linear odom data varies (standard deviation)
+        self.angular_odom_noise = 0.05   # amount that angular odom data varies (standard deviation)
+
         # TODO: define additional constants if needed
 
         # pose_listener responds to selection of a new approximate robot location (for instance using rviz)
-        self.create_subscription(PoseWithCovarianceStamped, 'initial_pose', self.update_initial_pose, 10)
+        self.pose_listener = self.create_subscription(PoseWithCovarianceStamped, 'initial_pose', self.update_initial_pose, 10)
 
         # publish the current particle cloud.  This enables viewing particles in rviz.
         self.particle_pub = self.create_publisher(PoseArray, "particlecloud", qos_profile_sensor_data)
 
+        # publish the particle cloud as markers to visualize weights in rviz
+        self.particle_marker_pub = self.create_publisher(Marker, "particle_marker", 10)
+
         # laser_subscriber listens for data from the lidar
-        self.create_subscription(LaserScan, self.scan_topic, self.scan_received, 10)
+        self.laser_subscriber = self.create_subscription(LaserScan, self.scan_topic, self.scan_received, 10)
 
         # this is used to keep track of the timestamps coming from bag files
         # knowing this information helps us set the timestamp of our map -> odom
@@ -172,7 +181,16 @@ class ParticleFilter(Node):
                math.fabs(new_odom_xy_theta[1] - self.current_odom_xy_theta[1]) > self.d_thresh or \
                math.fabs(new_odom_xy_theta[2] - self.current_odom_xy_theta[2]) > self.a_thresh
 
-
+    def resample_particles(self):
+        """ Resample the particles according to the new particle weights.
+            The weights stored with each particle should define the probability that a particular
+            particle is selected in the resampling step.  You may want to make use of the given helper
+            function draw_random_sample in helper_functions.py.
+        """
+        # make sure the distribution is normalized
+        self.normalize_particles()
+        # TODO: fill out the rest of the implementation   
+    
     def update_robot_pose(self):
         """ Update the estimate of the robot's pose given the updated particles.
             There are two logical methods for this:
@@ -182,13 +200,46 @@ class ParticleFilter(Node):
         # first make sure that the particle weights are normalized
         self.normalize_particles()
 
-        # TODO: assign the latest pose into self.robot_pose as a geometry_msgs.Pose object
-        # just to get started we will fix the robot's pose to always be at the origin
-        self.robot_pose = Pose()
+        mean_x = np.mean([p.x for p in self.particle_cloud])
+        mean_y = np.mean([p.y for p in self.particle_cloud])
+        mean_theta = np.mean([p.theta for p in self.particle_cloud])
+        q = quaternion_from_euler(0, 0, mean_theta)
+        self.robot_pose = Pose(position=Point(x=mean_x, y=mean_y, z=0.0),
+                    orientation=Quaternion(x=q[0], y=q[1], z=q[2], w=q[3]))
 
         self.transform_helper.fix_map_to_odom_transform(self.robot_pose,
                                                         self.odom_pose)
+    
+    def update_particles_with_laser(self, r, theta):
+        """ Updates the particle weights in response to the scan data
+            r: the distance readings to obstacles
+            theta: the angle relative to the robot frame for each corresponding reading 
+        """
+        average_errors = []
 
+        for particle in self.particle_cloud:
+            scan_errors = []
+            for i in range(len(r)):
+                if not np.isinf(r[i]) and r[i] > 0:
+                    scan_x = particle.x + r[i] * np.cos(theta[i])
+                    scan_y = particle.y + r[i] * np.sin(theta[i])
+                    error = self.occupancy_field.get_closest_obstacle_distance(scan_x, scan_y)
+                    scan_errors.append(error)
+            if len(scan_errors) > 0:
+                average_errors.append(np.nanmean(scan_errors))
+            else:
+                average_errors.append(5)
+        
+        for i, particle in enumerate(self.particle_cloud):
+            if average_errors[i] > 0:
+                particle.w = max(average_errors)/average_errors[i]
+            else:
+                particle.w = max(average_errors)/0.001
+            print(f"Error: {average_errors[i]}")
+            print(f"Particle weight: {particle.w}")
+        
+        self.normalize_particles()
+        
     def update_particles_with_odom(self):
         """ Update the particles using the newly given odometry pose.
             The function computes the value delta which is a tuple (x,y,theta)
@@ -208,25 +259,10 @@ class ParticleFilter(Node):
             self.current_odom_xy_theta = new_odom_xy_theta
             return
 
-        # TODO: modify particles using delta
-
-    def resample_particles(self):
-        """ Resample the particles according to the new particle weights.
-            The weights stored with each particle should define the probability that a particular
-            particle is selected in the resampling step.  You may want to make use of the given helper
-            function draw_random_sample in helper_functions.py.
-        """
-        # make sure the distribution is normalized
-        self.normalize_particles()
-        # TODO: fill out the rest of the implementation
-
-    def update_particles_with_laser(self, r, theta):
-        """ Updates the particle weights in response to the scan data
-            r: the distance readings to obstacles
-            theta: the angle relative to the robot frame for each corresponding reading 
-        """
-        # TODO: implement this
-        pass
+        for particle in self.particle_cloud:
+            particle.x += np.random.normal(delta[0], self.linear_odom_noise)
+            particle.y += np.random.normal(delta[1], self.linear_odom_noise)
+            particle.theta += np.random.normal(delta[2], self.angular_odom_noise)
 
     @staticmethod
 
@@ -243,21 +279,27 @@ class ParticleFilter(Node):
                       particle cloud around.  If this input is omitted, the odometry will be used """
         if xy_theta is None:
             xy_theta = self.transform_helper.convert_pose_to_xy_and_theta(self.odom_pose)
+        
         self.particle_cloud = []
-        # TODO create particles
+
+        for _ in range(self.n_particles):
+            particle = Particle(np.random.normal(xy_theta[0], 0.25), np.random.normal(xy_theta[1], 0.25), np.random.normal(xy_theta[2], 0.25))
+            self.particle_cloud.append(particle)
 
         self.normalize_particles()
         self.update_robot_pose()
 
     def normalize_particles(self):
         """ Make sure the particle weights define a valid distribution (i.e. sum to 1.0) """
-        # TODO: implement this
-        pass
+        weight_sum = sum([particle.w for particle in self.particle_cloud])
+        for particle in self.particle_cloud:
+            particle.w /= weight_sum
 
     def publish_particles(self, timestamp):
         particles_conv = []
-        for p in self.particle_cloud:
+        for i, p in enumerate(self.particle_cloud):
             particles_conv.append(p.as_pose())
+            self.particle_marker_pub.publish(create_marker((p.x, p.y, 0.0), p.w * 3, i, self.get_clock().now().to_msg()))
         # actually send the message so that we can view it in rviz
         self.particle_pub.publish(PoseArray(header=Header(stamp=timestamp,
                                             frame_id=self.map_frame),

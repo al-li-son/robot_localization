@@ -4,6 +4,7 @@
 from urllib.robotparser import RobotFileParser
 from std_msgs.msg import Header
 from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion, TransformStamped
+from visualization_msgs.msg import Marker
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros.transform_broadcaster import TransformBroadcaster
@@ -15,6 +16,30 @@ import numpy as np
 from copy import deepcopy
 from numpy.random import random_sample
 import PyKDL
+
+def create_marker(xyz, w, id, timestamp):
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = timestamp
+        marker.id = id
+
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = xyz[0]
+        marker.pose.position.y = xyz[1]
+        marker.pose.position.z = xyz[2]
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = w
+        marker.scale.y = w
+        marker.scale.z = w
+        marker.color.a = 1.0
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        return marker
 
 def stamped_transform_to_pose(t):
     t = t.transform
