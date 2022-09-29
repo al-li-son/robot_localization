@@ -88,7 +88,7 @@ class ParticleFilter(Node):
         # TODO: define additional constants if needed
 
         # pose_listener responds to selection of a new approximate robot location (for instance using rviz)
-        self.pose_listener = self.create_subscription(PoseWithCovarianceStamped, 'initial_pose', self.update_initial_pose, 10)
+        self.create_subscription(PoseWithCovarianceStamped, 'initialpose', self.update_initial_pose, 10)
 
         # publish the current particle cloud.  This enables viewing particles in rviz.
         self.particle_pub = self.create_publisher(PoseArray, "particlecloud", qos_profile_sensor_data)
@@ -97,7 +97,7 @@ class ParticleFilter(Node):
         self.particle_marker_pub = self.create_publisher(Marker, "particle_marker", 10)
 
         # laser_subscriber listens for data from the lidar
-        self.laser_subscriber = self.create_subscription(LaserScan, self.scan_topic, self.scan_received, 10)
+        self.create_subscription(LaserScan, self.scan_topic, self.scan_received, 10)
 
         # this is used to keep track of the timestamps coming from bag files
         # knowing this information helps us set the timestamp of our map -> odom
@@ -287,7 +287,6 @@ class ParticleFilter(Node):
             self.particle_cloud.append(particle)
 
         self.normalize_particles()
-        self.update_robot_pose()
 
     def normalize_particles(self):
         """ Make sure the particle weights define a valid distribution (i.e. sum to 1.0) """
