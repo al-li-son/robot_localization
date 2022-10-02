@@ -2,6 +2,7 @@
 
 """ This is the starter code for the robot localization project """
 
+from hashlib import new
 from re import X
 import rclpy
 from threading import Thread
@@ -15,6 +16,7 @@ from rclpy.duration import Duration
 import math
 import time
 import numpy as np
+from scipy.stats import norm
 from occupancy_field import OccupancyField
 from helper_functions import TFHelper, create_marker, draw_random_sample
 from rclpy.qos import qos_profile_sensor_data
@@ -77,7 +79,7 @@ class ParticleFilter(Node):
         self.odom_frame = "odom"        # the name of the odometry coordinate frame
         self.scan_topic = "scan"        # the topic where we will get laser scans from 
 
-        self.n_particles = 50          # the number of particles to use
+        self.n_particles = 300          # the number of particles to use
 
         self.d_thresh = 0.2             # the amount of linear movement before performing an update
         self.a_thresh = math.pi/6       # the amount of angular movement before performing an update
@@ -189,7 +191,10 @@ class ParticleFilter(Node):
         """
         # make sure the distribution is normalized
         self.normalize_particles()
-        # TODO: fill out the rest of the implementation   
+        # TODO: fill out the rest of the implementation
+        probabilities = [p.w for p in self.particle_cloud]
+        new_particle_cloud = draw_random_sample(self.particle_cloud, probabilities, self.n_particles)
+        self.particle_cloud = new_particle_cloud
     
     def update_robot_pose(self):
         """ Update the estimate of the robot's pose given the updated particles.
@@ -215,29 +220,18 @@ class ParticleFilter(Node):
             r: the distance readings to obstacles
             theta: the angle relative to the robot frame for each corresponding reading 
         """
-        average_errors = []
-
+        print("---------- UPDATING PARTICLES WITH LASER ----------")
         for particle in self.particle_cloud:
-            scan_errors = []
-            for i in range(len(r)):
+            scan_sum = 0
+            for i in range(0, len(r), 5):
                 if not np.isinf(r[i]) and r[i] > 0:
-                    scan_x = particle.x + r[i] * np.cos(theta[i])
-                    scan_y = particle.y + r[i] * np.sin(theta[i])
+                    scan_x = particle.x + r[i] * np.cos(theta[i] + particle.theta)
+                    scan_y = particle.y + r[i] * np.sin(theta[i] + particle.theta)
                     error = self.occupancy_field.get_closest_obstacle_distance(scan_x, scan_y)
-                    scan_errors.append(error)
-            if len(scan_errors) > 0:
-                average_errors.append(np.nanmean(scan_errors))
-            else:
-                average_errors.append(5)
-        
-        for i, particle in enumerate(self.particle_cloud):
-            if average_errors[i] > 0:
-                particle.w = max(average_errors)/average_errors[i]
-            else:
-                particle.w = max(average_errors)/0.001
-            print(f"Error: {average_errors[i]}")
-            print(f"Particle weight: {particle.w}")
-        
+                    if not np.isnan(error):
+                        scan_sum += norm.pdf(error, 0.0, 0.5)
+            particle.w = scan_sum/72
+
         self.normalize_particles()
         
     def update_particles_with_odom(self):
@@ -259,10 +253,12 @@ class ParticleFilter(Node):
             self.current_odom_xy_theta = new_odom_xy_theta
             return
 
+        print("---------- UPDATING PARTICLES WITH ODOM ----------")
+
         for particle in self.particle_cloud:
-            particle.x += np.random.normal(delta[0], self.linear_odom_noise)
-            particle.y += np.random.normal(delta[1], self.linear_odom_noise)
-            particle.theta += np.random.normal(delta[2], self.angular_odom_noise)
+            particle.x += delta[0] + np.random.normal(0.0, self.linear_odom_noise)
+            particle.y += delta[1] + np.random.normal(0.0, self.linear_odom_noise)
+            particle.theta += delta[2] + np.random.normal(0.0, self.angular_odom_noise)
 
     def update_initial_pose(self, msg):
         """ Callback function to handle re-initializing the particle filter based on a pose estimate.
@@ -296,7 +292,7 @@ class ParticleFilter(Node):
         particles_conv = []
         for i, p in enumerate(self.particle_cloud):
             particles_conv.append(p.as_pose())
-            self.particle_marker_pub.publish(create_marker((p.x, p.y, 0.0), p.w * 3, i, self.get_clock().now().to_msg()))
+            # self.particle_marker_pub.publish(create_marker((p.x, p.y, 0.0), p.w * 3, i, self.get_clock().now().to_msg()))
         # actually send the message so that we can view it in rviz
         self.particle_pub.publish(PoseArray(header=Header(stamp=timestamp,
                                             frame_id=self.map_frame),
