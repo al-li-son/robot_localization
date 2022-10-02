@@ -1,1 +1,2 @@
-/robot_localization/__pycache__/*
+/robot_localization/__pycache__/
+**/*.db3-*
