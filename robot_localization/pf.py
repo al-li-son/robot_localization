@@ -221,16 +221,20 @@ class ParticleFilter(Node):
             theta: the angle relative to the robot frame for each corresponding reading 
         """
         print("---------- UPDATING PARTICLES WITH LASER ----------")
+        scan_points = np.array([
+            [r[i] * np.cos(theta[i]) for i in range(360) if (r[i] > 0 and not np.isinf(r[i]))],
+            [r[i] * np.sin(theta[i]) for i in range(360) if (r[i] > 0 and not np.isinf(r[i]))],
+        ])
+        scan_points = np.vstack((scan_points, np.ones((1,scan_points.shape[1]))))
         for particle in self.particle_cloud:
+            particle_transform = self.transform_helper.convert_xy_and_theta_to_transform((particle.x, particle.y, particle.theta))
+            converted_scans = np.matmul(particle_transform, scan_points)
             scan_sum = 0
-            for i in range(0, len(r), 5):
-                if not np.isinf(r[i]) and r[i] > 0:
-                    scan_x = particle.x + r[i] * np.cos(theta[i] + particle.theta)
-                    scan_y = particle.y + r[i] * np.sin(theta[i] + particle.theta)
-                    error = self.occupancy_field.get_closest_obstacle_distance(scan_x, scan_y)
-                    if not np.isnan(error):
-                        scan_sum += norm.pdf(error, 0.0, 0.5)
-            particle.w = scan_sum/72
+            for i in range(converted_scans.shape[1]):
+                error = self.occupancy_field.get_closest_obstacle_distance(converted_scans[0,i], converted_scans[1,i])
+                if not np.isnan(error):
+                    scan_sum += norm.pdf(x=error, loc=0.0, scale=0.1)
+            particle.w = scan_sum/converted_scans.shape[1]
 
         self.normalize_particles()
         
@@ -244,9 +248,12 @@ class ParticleFilter(Node):
         # compute the change in x,y,theta since our last update
         if self.current_odom_xy_theta:
             old_odom_xy_theta = self.current_odom_xy_theta
-            delta = (new_odom_xy_theta[0] - self.current_odom_xy_theta[0],
-                     new_odom_xy_theta[1] - self.current_odom_xy_theta[1],
-                     new_odom_xy_theta[2] - self.current_odom_xy_theta[2])
+
+            old_odom_transform = self.transform_helper.convert_xy_and_theta_to_transform(old_odom_xy_theta)
+
+            new_odom_transform = self.transform_helper.convert_xy_and_theta_to_transform(new_odom_xy_theta)
+
+            relative_transform = np.matmul(np.linalg.inv(old_odom_transform), new_odom_transform)
 
             self.current_odom_xy_theta = new_odom_xy_theta
         else:
@@ -256,9 +263,11 @@ class ParticleFilter(Node):
         print("---------- UPDATING PARTICLES WITH ODOM ----------")
 
         for particle in self.particle_cloud:
-            particle.x += delta[0] + np.random.normal(0.0, self.linear_odom_noise)
-            particle.y += delta[1] + np.random.normal(0.0, self.linear_odom_noise)
-            particle.theta += delta[2] + np.random.normal(0.0, self.angular_odom_noise)
+            particle_transform = self.transform_helper.convert_xy_and_theta_to_transform((particle.x, particle.y, particle.theta))
+            new_particle_transform = np.matmul(particle_transform, relative_transform)
+            particle.x = new_particle_transform[0,2] + np.random.normal(0.0, self.linear_odom_noise)
+            particle.y = new_particle_transform[1,2] + np.random.normal(0.0, self.linear_odom_noise)
+            particle.theta = np.arctan2(new_particle_transform[1,0], new_particle_transform[0,0]) + np.random.normal(0.0, self.angular_odom_noise)
 
     def update_initial_pose(self, msg):
         """ Callback function to handle re-initializing the particle filter based on a pose estimate.

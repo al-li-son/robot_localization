@@ -73,6 +73,13 @@ class TFHelper(object):
         self.node = node        # hold onto this for logging
         self.transform_tolerance = Duration(seconds=0.08)    # tolerance for mismatch between scan and odom timestamp
 
+    def convert_xy_and_theta_to_transform(self, xy_theta):
+        return np.array([
+                [np.cos(xy_theta[2]), -np.sin(xy_theta[2]), xy_theta[0]],
+                [np.sin(xy_theta[2]), np.cos(xy_theta[2]), xy_theta[1]],
+                [0, 0, 1]
+                ])
+    
     def convert_translation_rotation_to_pose(self, translation, rotation):
         """ Convert from representation of a pose as translation and rotation
             (Quaternion) tuples to a geometry_msgs/Pose message """
