@@ -88,8 +88,8 @@ class ParticleFilter(Node):
         self.d_thresh = 0.2             # the amount of linear movement before performing an update
         self.a_thresh = math.pi/6       # the amount of angular movement before performing an update
 
-        self.initialize_particle_linear_noise = 0.25    # std dev of normal distribution used to initialize positions of cloud
-        self.initialize_particle_angular_noise = 0.25   # std dev of normal distribution used to initialize angles of cloud
+        self.initialize_particle_linear_noise = 0.5    # std dev of normal distribution used to initialize positions of cloud
+        self.initialize_particle_angular_noise = 0.5   # std dev of normal distribution used to initialize angles of cloud
 
         self.linear_odom_noise = 0.05    # amount that linear odom data varies (standard deviation)
         self.angular_odom_noise = 0.05   # amount that angular odom data varies (standard deviation)

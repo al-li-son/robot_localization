@@ -3,7 +3,7 @@
 
 Allison Li
 
-![Robot localization demo](./media/robot_localization_demo.gif)
+![Robot localization demo](./media/demo_2.gif)
 
 ## Overview
 The goal of this project was to implement a [particle filter](https://en.wikipedia.org/wiki/Particle_filter) to localize a robot within a known map. 
